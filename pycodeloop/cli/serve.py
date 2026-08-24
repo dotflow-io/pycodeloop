@@ -9,6 +9,7 @@ import json
 import queue
 import sys
 import threading
+import time
 import uuid
 
 import typer
@@ -31,6 +32,9 @@ from pycodeloop.protocol.events import (
     response,
 )
 
+_HEARTBEAT_INTERVAL = 15.0
+_CONFIRM_TIMEOUT = 120.0
+
 
 class RpcServer:
     """Wires `Agent` callbacks to JSON-RPC notifications instead of the
@@ -52,13 +56,28 @@ class RpcServer:
         self._confirm_waiters: dict[str, queue.Queue] = {}
         self._cancel_event: threading.Event | None = None
         self._chat_thread: threading.Thread | None = None
+        self._disconnected = False
         self._wire_callbacks()
 
     def _send(self, message: dict) -> None:
+        """Best-effort write of one NDJSON line to stdout. The client
+        (editor extension) can disconnect mid-turn — closing its end of
+        the pipe — at any point, including while a background thread is
+        still streaming deltas for an in-flight turn. Once that happens
+        every further write raises the same broken-pipe error, so this
+        marks the server disconnected and gives up quietly instead of
+        raising out of a callback (which would otherwise abort whatever
+        turn/tool loop is in progress) or crashing a second time from
+        inside an error handler that itself calls `_send`."""
+        if self._disconnected:
+            return
         line = json.dumps(message)
-        with self._out_lock:
-            sys.stdout.write(line + "\n")
-            sys.stdout.flush()
+        try:
+            with self._out_lock:
+                sys.stdout.write(line + "\n")
+                sys.stdout.flush()
+        except OSError:
+            self._disconnected = True
 
     def _notify(self, method: str, params: dict) -> None:
         self._send(notification(method, params))
@@ -137,7 +156,10 @@ class RpcServer:
                 {"id": request_id, "name": name, "preview": preview},
             )
             try:
-                return answer_queue.get()
+                return answer_queue.get(timeout=_CONFIRM_TIMEOUT)
+            except queue.Empty:
+                self._notify("chat/confirmTimeout", {"id": request_id})
+                return False
             finally:
                 self._confirm_waiters.pop(request_id, None)
 
@@ -153,8 +175,23 @@ class RpcServer:
         agent.on_compact_end = on_compact_end
         agent.confirm = confirm
 
+    def _run_heartbeat(self, stop: threading.Event) -> None:
+        """Emits `chat/heartbeat` every `_HEARTBEAT_INTERVAL` seconds
+        while a turn is in flight. Long reasoning or a long-running
+        tool can otherwise leave the client with no message at all for
+        minutes; a client with its own read timeout may then conclude
+        the process died and drop the connection, losing the turn even
+        though the server was still working on it."""
+        while not stop.wait(_HEARTBEAT_INTERVAL):
+            self._notify("chat/heartbeat", {})
+
     def _run_chat(self, request_id, params: dict) -> None:
         self._cancel_event = threading.Event()
+        heartbeat_stop = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._run_heartbeat, args=(heartbeat_stop,), daemon=True
+        )
+        heartbeat_thread.start()
         try:
             result = self.flow.run(
                 params.get("prompt", ""),
@@ -165,6 +202,8 @@ class RpcServer:
             self._respond(request_id, {"text": result})
         except Exception as exc:
             self._respond_error(request_id, SERVER_ERROR, str(exc))
+        finally:
+            heartbeat_stop.set()
 
     def _run_ask(self, request_id, params: dict) -> None:
         try:
@@ -259,7 +298,11 @@ class RpcServer:
                 continue
             try:
                 request = json.loads(line)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                console.print(
+                    f"[dim]⚠ dropped malformed request line ({exc}): "
+                    f"{line[:200]!r}[/dim]"
+                )
                 continue
             self.handle(request)
 
