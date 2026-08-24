@@ -3,9 +3,6 @@ and an unresponsive one — no subprocess, no real stdin/stdout, so these
 stay fast and don't share the flakiness of the end-to-end serve tests."""
 
 import io
-import json
-import queue
-import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -36,9 +33,12 @@ class TestSendBrokenPipe(unittest.TestCase):
         server = _fake_server()
 
         with mock.patch(
-            "sys.stdout", new=mock.Mock(write=mock.Mock(side_effect=BrokenPipeError))
+            "sys.stdout",
+            new=mock.Mock(write=mock.Mock(side_effect=BrokenPipeError)),
         ):
-            server._send({"jsonrpc": "2.0", "method": "chat/heartbeat", "params": {}})
+            server._send(
+                {"jsonrpc": "2.0", "method": "chat/heartbeat", "params": {}}
+            )
 
         self.assertTrue(server._disconnected)
 
@@ -48,7 +48,9 @@ class TestSendBrokenPipe(unittest.TestCase):
         stdout = mock.Mock()
 
         with mock.patch("sys.stdout", new=stdout):
-            server._send({"jsonrpc": "2.0", "method": "chat/heartbeat", "params": {}})
+            server._send(
+                {"jsonrpc": "2.0", "method": "chat/heartbeat", "params": {}}
+            )
 
         stdout.write.assert_not_called()
 
@@ -65,7 +67,9 @@ class TestConfirmTimeout(unittest.TestCase):
             answer = server.flow.agent.confirm("bash", "$ echo hi")
 
         self.assertFalse(answer)
-        methods = [call.args[0]["method"] for call in server._send.call_args_list]
+        methods = [
+            call.args[0]["method"] for call in server._send.call_args_list
+        ]
         self.assertIn("chat/confirmTimeout", methods)
 
     def test_confirm_returns_answer_when_it_arrives_in_time(self):
@@ -90,9 +94,10 @@ class TestMalformedInputLine(unittest.TestCase):
         server._send = mock.Mock()
         server.handle = mock.Mock()
 
-        with mock.patch(
-            "sys.stdin", new=io.StringIO("not json at all\n")
-        ), mock.patch("pycodeloop.cli.serve.console.print") as mock_print:
+        with (
+            mock.patch("sys.stdin", new=io.StringIO("not json at all\n")),
+            mock.patch("pycodeloop.cli.serve.console.print") as mock_print,
+        ):
             server.serve_forever()
 
         mock_print.assert_called_once()

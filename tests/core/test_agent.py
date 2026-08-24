@@ -1188,7 +1188,9 @@ class TestSafeCallback(unittest.TestCase):
             ]
         )
         agent = Agent(provider=provider, tools=[EchoTool()])
-        agent.on_tool_result = mock.Mock(side_effect=RuntimeError("render bug"))
+        agent.on_tool_result = mock.Mock(
+            side_effect=RuntimeError("render bug")
+        )
         session = Session(system_prompt="sys")
 
         result = agent.run("go", session=session)

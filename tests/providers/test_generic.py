@@ -423,12 +423,14 @@ class TestLoadProviderFromJson(GenericProviderTestCase):
         )
         provider = GenericProvider.from_json(path)
 
-        with mock.patch(
-            "pycodeloop.providers.generic.urllib.request.urlopen",
-            return_value=_TimeoutAfterLinesResponse(b"", raise_after=0),
+        with (
+            mock.patch(
+                "pycodeloop.providers.generic.urllib.request.urlopen",
+                return_value=_TimeoutAfterLinesResponse(b"", raise_after=0),
+            ),
+            self.assertRaises(TimeoutError),
         ):
-            with self.assertRaises(TimeoutError):
-                provider.complete("sys", [], [], on_delta=lambda _: None)
+            provider.complete("sys", [], [], on_delta=lambda _: None)
 
     def test_streaming_stops_promptly_when_cancel_event_is_set(self):
         """Regression: cancel_event was accepted nowhere in the streaming

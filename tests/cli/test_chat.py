@@ -139,12 +139,12 @@ class TestRunTurnPreservesStreamedText(unittest.TestCase):
         markdown_bodies = [
             entry.renderable.markup
             for entry in logged
-            if isinstance(entry, Panel) and isinstance(entry.renderable, Markdown)
+            if isinstance(entry, Panel)
+            and isinstance(entry.renderable, Markdown)
         ]
         self.assertTrue(
             any(
-                "here is what I had so far" in body
-                for body in markdown_bodies
+                "here is what I had so far" in body for body in markdown_bodies
             )
         )
         self.assertEqual(app._text_buffer, "")

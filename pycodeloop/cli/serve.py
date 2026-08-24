@@ -9,7 +9,6 @@ import json
 import queue
 import sys
 import threading
-import time
 import uuid
 
 import typer

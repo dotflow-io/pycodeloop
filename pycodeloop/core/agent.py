@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections.abc import Callable
@@ -116,10 +117,8 @@ class Agent:
 
     def _trace(self, event_type: str, **fields) -> None:
         if self.on_trace_event:
-            try:
+            with contextlib.suppress(Exception):
                 self.on_trace_event({"type": event_type, **fields})
-            except Exception:
-                pass
 
     def _safe_call(self, callback: Callable | None, *args) -> None:
         """Invokes a consumer-supplied `on_*` callback (UI rendering,
@@ -517,9 +516,7 @@ class Agent:
                 return error_text
 
             self.usage = self.usage + response.usage
-            self._safe_call(
-                self.on_usage, response.usage, self.usage, elapsed
-            )
+            self._safe_call(self.on_usage, response.usage, self.usage, elapsed)
 
             self._trace(
                 "turn",
