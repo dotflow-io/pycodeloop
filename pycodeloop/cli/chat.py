@@ -431,6 +431,20 @@ class CodeLoopApp(App):
             )
         except Exception as exc:
             self.call_from_thread(self._stop_thinking)
+            if self._text_buffer.strip():
+                self.call_from_thread(
+                    self._log,
+                    Panel(
+                        Markdown(self._text_buffer),
+                        border_style="grey50",
+                        title="[dim]interrupted[/dim]",
+                        subtitle=(
+                            "[bold white on grey30] Agent [/bold white on grey30]"
+                        ),
+                        subtitle_align="right",
+                    ),
+                )
+                self._text_buffer = ""
             self.call_from_thread(
                 self._log,
                 self._styled("[bold white]✗ Error:[/bold white] ", str(exc)),
