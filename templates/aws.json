@@ -2,5 +2,5 @@
   "url": "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions",
   "model": "openai.gpt-oss-120b",
   "api_key_env": "AWS_BEARER_TOKEN_BEDROCK",
-  "timeout": 60
+  "timeout": 180
 }

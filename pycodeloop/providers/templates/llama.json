@@ -2,5 +2,5 @@
   "url": "https://api.together.ai/v1/chat/completions",
   "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
   "api_key_env": "TOGETHER_API_KEY",
-  "timeout": 60
+  "timeout": 180
 }
