@@ -2,5 +2,5 @@
   "url": "https://api.openai.com/v1/chat/completions",
   "model": "gpt-5.6",
   "api_key_env": "OPENAI_API_KEY",
-  "timeout": 60
+  "timeout": 180
 }

@@ -6,6 +6,9 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from rich.markdown import Markdown
+from rich.panel import Panel
+
 from pycodeloop.cli.chat import CodeLoopApp
 
 
@@ -110,6 +113,55 @@ class TestConfirmStaleness(unittest.TestCase):
         app._drain_stale_confirm_answer()
 
         self.assertFalse(app._stale_confirm_answer)
+
+
+class TestRunTurnPreservesStreamedText(unittest.TestCase):
+    """`_text_buffer` accumulates streamed text as it arrives; if
+    `flow.run()` then raises (a failure not covered by the provider's
+    own partial-response handling), that already-streamed text used to
+    vanish — only the generic error was shown. It must now be flushed
+    to the log first."""
+
+    def test_partial_text_is_logged_before_the_error(self):
+        app = _fake_app()
+
+        def failing_run(*args, **kwargs):
+            app._text_buffer = "here is what I had so far"
+            raise RuntimeError("connection died")
+
+        app.flow.run = failing_run
+
+        import asyncio
+
+        asyncio.run(app._run_turn("do something"))
+
+        logged = [call.args[0] for call in app._log.call_args_list]
+        markdown_bodies = [
+            entry.renderable.markup
+            for entry in logged
+            if isinstance(entry, Panel)
+            and isinstance(entry.renderable, Markdown)
+        ]
+        self.assertTrue(
+            any(
+                "here is what I had so far" in body for body in markdown_bodies
+            )
+        )
+        self.assertEqual(app._text_buffer, "")
+
+    def test_no_buffer_only_logs_the_error(self):
+        app = _fake_app()
+        app.flow.run = mock.Mock(side_effect=RuntimeError("boom"))
+
+        import asyncio
+
+        asyncio.run(app._run_turn("do something"))
+
+        logged = [call.args[0] for call in app._log.call_args_list]
+        self.assertTrue(any("boom" in str(entry) for entry in logged))
+        self.assertFalse(
+            any("interrupted" in str(entry).lower() for entry in logged)
+        )
 
 
 if __name__ == "__main__":

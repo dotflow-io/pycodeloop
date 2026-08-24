@@ -2,5 +2,5 @@
   "url": "https://api.moonshot.ai/v1/chat/completions",
   "model": "kimi-k3",
   "api_key_env": "MOONSHOT_API_KEY",
-  "timeout": 60
+  "timeout": 180
 }

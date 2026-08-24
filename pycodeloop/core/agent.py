@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections.abc import Callable
@@ -116,7 +117,27 @@ class Agent:
 
     def _trace(self, event_type: str, **fields) -> None:
         if self.on_trace_event:
-            self.on_trace_event({"type": event_type, **fields})
+            with contextlib.suppress(Exception):
+                self.on_trace_event({"type": event_type, **fields})
+
+    def _safe_call(self, callback: Callable | None, *args) -> None:
+        """Invokes a consumer-supplied `on_*` callback (UI rendering,
+        storage persistence, etc.) without letting a bug on that side
+        abort the turn/tool loop still in progress. Before this, an
+        exception from e.g. `on_message` (a storage write failing) or
+        `on_tool_result` (a rendering bug) propagated straight out of
+        `Agent.run()`/`_run_tool_calls()`, killing the rest of the turn
+        over what should have been a self-contained side effect."""
+        if callback is None:
+            return
+        try:
+            callback(*args)
+        except Exception as exc:
+            self._trace(
+                "callback_error",
+                callback=getattr(callback, "__name__", repr(callback)),
+                error=str(exc),
+            )
 
     def _complete(self, **kwargs) -> ProviderResponse:
         """`provider.complete()` with retry + exponential backoff on
@@ -155,8 +176,7 @@ class Agent:
                         delay=delay,
                         error=str(exc),
                     )
-                    if self.on_retry:
-                        self.on_retry(attempt + 1, delay, exc)
+                    self._safe_call(self.on_retry, attempt + 1, delay, exc)
                     time.sleep(delay)
                     delay *= 2
 
@@ -172,8 +192,7 @@ class Agent:
         caller persist incrementally instead of only after the whole
         (possibly long, multi-tool-call) turn finishes, so a crash
         mid-turn doesn't lose everything already done in it."""
-        if self.on_message:
-            self.on_message()
+        self._safe_call(self.on_message)
 
     def _tool_schemas(self) -> list[dict]:
         return [tool.schema() for tool in self.tools.values()]
@@ -252,8 +271,7 @@ class Agent:
     ) -> None:
         for call in calls:
             self._trace("tool_call", name=call.name, arguments=call.arguments)
-            if self.on_tool_call:
-                self.on_tool_call(call.name, call.arguments)
+            self._safe_call(self.on_tool_call, call.name, call.arguments)
 
         if cancel_event and cancel_event.is_set():
             results = {call.id: ("Cancelled by user.", True) for call in calls}
@@ -302,8 +320,9 @@ class Agent:
                 is_error=is_error,
                 result_len=len(result_text),
             )
-            if self.on_tool_result:
-                self.on_tool_result(call.name, result_text, is_error)
+            self._safe_call(
+                self.on_tool_result, call.name, result_text, is_error
+            )
             session.add_tool_result(call.id, result_text)
             self._notify_message()
 
@@ -332,8 +351,7 @@ class Agent:
         if len(turn_starts) <= _COMPACT_KEEP_RECENT_TURNS:
             return
 
-        if self.on_compact_start:
-            self.on_compact_start()
+        self._safe_call(self.on_compact_start)
 
         before_count = len(history)
         cutoff = turn_starts[-_COMPACT_KEEP_RECENT_TURNS]
@@ -365,8 +383,9 @@ class Agent:
         self._trace(
             "compact", before=before_count, after=len(session.messages)
         )
-        if self.on_compact_end:
-            self.on_compact_end(before_count, len(session.messages))
+        self._safe_call(
+            self.on_compact_end, before_count, len(session.messages)
+        )
 
     def run(
         self,
@@ -403,8 +422,9 @@ class Agent:
                 self._compact(session)
 
             tools = self._tool_schemas()
-            if self.on_request:
-                self.on_request(len(session.history()), len(tools))
+            self._safe_call(
+                self.on_request, len(session.history()), len(tools)
+            )
 
             started_at = time.perf_counter()
             response = self._complete(
@@ -418,13 +438,13 @@ class Agent:
 
             if response.stop_reason == "cancelled":
                 self.usage = self.usage + response.usage
-                if self.on_usage:
-                    self.on_usage(response.usage, self.usage, elapsed)
+                self._safe_call(
+                    self.on_usage, response.usage, self.usage, elapsed
+                )
                 if response.text.strip():
                     session.add_assistant(response.text)
                     self._notify_message()
-                    if self.on_turn_end:
-                        self.on_turn_end()
+                    self._safe_call(self.on_turn_end)
                 self._trace("run_end", reason="cancelled")
                 return "Cancelled by user."
 
@@ -435,8 +455,9 @@ class Agent:
                 and empty_retries < _MAX_EMPTY_RESPONSE_RETRIES
             ):
                 self.usage = self.usage + response.usage
-                if self.on_usage:
-                    self.on_usage(response.usage, self.usage, elapsed)
+                self._safe_call(
+                    self.on_usage, response.usage, self.usage, elapsed
+                )
 
                 empty_retries += 1
                 self._trace(
@@ -444,15 +465,15 @@ class Agent:
                     model=self.provider.model,
                     attempt=empty_retries,
                 )
-                if self.on_retry:
-                    self.on_retry(
-                        empty_retries,
-                        0.0,
-                        RuntimeError(
-                            f"{self.provider.model} returned an empty "
-                            "response with no tool calls"
-                        ),
-                    )
+                self._safe_call(
+                    self.on_retry,
+                    empty_retries,
+                    0.0,
+                    RuntimeError(
+                        f"{self.provider.model} returned an empty "
+                        "response with no tool calls"
+                    ),
+                )
                 started_at = time.perf_counter()
                 response = self._complete(
                     system_prompt=self.system_prompt,
@@ -465,20 +486,21 @@ class Agent:
 
                 if response.stop_reason == "cancelled":
                     self.usage = self.usage + response.usage
-                    if self.on_usage:
-                        self.on_usage(response.usage, self.usage, elapsed)
+                    self._safe_call(
+                        self.on_usage, response.usage, self.usage, elapsed
+                    )
                     if response.text.strip():
                         session.add_assistant(response.text)
                         self._notify_message()
-                        if self.on_turn_end:
-                            self.on_turn_end()
+                        self._safe_call(self.on_turn_end)
                     self._trace("run_end", reason="cancelled")
                     return "Cancelled by user."
 
             if not response.text.strip() and not response.tool_calls:
                 self.usage = self.usage + response.usage
-                if self.on_usage:
-                    self.on_usage(response.usage, self.usage, elapsed)
+                self._safe_call(
+                    self.on_usage, response.usage, self.usage, elapsed
+                )
 
                 error_text = (
                     f"{self.provider.model} returned an empty response "
@@ -489,14 +511,12 @@ class Agent:
                 )
                 session.add_assistant(error_text)
                 self._notify_message()
-                if self.on_turn_end:
-                    self.on_turn_end()
+                self._safe_call(self.on_turn_end)
                 self._trace("run_end", reason="empty_response")
                 return error_text
 
             self.usage = self.usage + response.usage
-            if self.on_usage:
-                self.on_usage(response.usage, self.usage, elapsed)
+            self._safe_call(self.on_usage, response.usage, self.usage, elapsed)
 
             self._trace(
                 "turn",
@@ -509,8 +529,9 @@ class Agent:
             )
 
             session.update_last_context_tokens(response.usage.input_tokens)
-            if self.on_context:
-                self.on_context(response.usage.input_tokens, context_window)
+            self._safe_call(
+                self.on_context, response.usage.input_tokens, context_window
+            )
 
             tool_calls = [
                 {
@@ -523,8 +544,7 @@ class Agent:
             ]
             session.add_assistant(response.text, tool_calls=tool_calls or None)
             self._notify_message()
-            if self.on_turn_end:
-                self.on_turn_end()
+            self._safe_call(self.on_turn_end)
 
             if not response.tool_calls:
                 self._trace("run_end", reason="done")

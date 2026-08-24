@@ -137,7 +137,7 @@ class GenericProvider(Provider):
           "model": "my-model",
           "api_key_env": "MY_API_KEY",
           "headers": {"X-Custom": "value"},
-          "timeout": 60,
+          "timeout": 180,
           "context_window": 4096,
           "response_paths": {
             "text": "choices.0.message.content",
@@ -191,7 +191,7 @@ class GenericProvider(Provider):
         auth_prefix: str = "Bearer ",
         request_builder: RequestBuilder | None = None,
         response_parser: ResponseParser | None = None,
-        timeout: float = 60.0,
+        timeout: float = 180.0,
         repetition_min_period: int = _REPETITION_MIN_PERIOD,
         repetition_max_period: int = _REPETITION_MAX_PERIOD,
         repetition_repeats: int = _REPETITION_REPEATS,
@@ -258,7 +258,7 @@ class GenericProvider(Provider):
             auth_prefix=data.get("auth_prefix", "Bearer "),
             request_builder=request_builder,
             response_parser=response_parser,
-            timeout=data.get("timeout", 60.0),
+            timeout=data.get("timeout", 180.0),
             context_window=data.get("context_window"),
             supports_openai_sse=response_shape != "anthropic",
             include_usage_in_stream=data.get("include_usage_in_stream", True),
@@ -406,82 +406,90 @@ class GenericProvider(Provider):
         saw_terminal_marker = False
         usage = Usage()
 
-        with self._open(body, config) as response:
-            for raw_line in response:
-                if cancel_event is not None and cancel_event.is_set():
-                    stop_reason = "cancelled"
-                    saw_terminal_marker = True
-                    break
-                line = raw_line.decode().strip()
-                if not line or not line.startswith("data: "):
-                    continue
-                payload = line[len("data: ") :]
-                if payload == "[DONE]":
-                    saw_terminal_marker = True
-                    break
-                try:
-                    chunk = json.loads(payload)
-                except json.JSONDecodeError:
-                    if stop_reason is None:
-                        stop_reason = "malformed_stream"
-                    break
-
-                if chunk.get("usage"):
-                    usage = Usage(
-                        input_tokens=chunk["usage"].get("prompt_tokens", 0),
-                        output_tokens=chunk["usage"].get(
-                            "completion_tokens", 0
-                        ),
-                    )
-
-                choices = chunk.get("choices") or []
-                if not choices:
-                    continue
-                choice = choices[0]
-                delta = choice.get("delta") or {}
-
-                if delta.get("content"):
-                    candidate = text + delta["content"]
-                    if _is_repeating(
-                        candidate,
-                        self.repetition_min_period,
-                        self.repetition_max_period,
-                        self.repetition_repeats,
-                    ):
-                        stop_reason = "repetition"
+        try:
+            with self._open(body, config) as response:
+                for raw_line in response:
+                    if cancel_event is not None and cancel_event.is_set():
+                        stop_reason = "cancelled"
+                        saw_terminal_marker = True
                         break
-                    text = candidate
-                    on_delta(delta["content"])
+                    line = raw_line.decode().strip()
+                    if not line or not line.startswith("data: "):
+                        continue
+                    payload = line[len("data: ") :]
+                    if payload == "[DONE]":
+                        saw_terminal_marker = True
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except json.JSONDecodeError:
+                        if stop_reason is None:
+                            stop_reason = "malformed_stream"
+                        break
 
-                for tc in delta.get("tool_calls") or []:
-                    index = tc.get("index", 0)
-                    acc = pending.setdefault(
-                        index,
-                        {
-                            "id": None,
-                            "name": None,
-                            "arguments": "",
-                            "extra": {},
-                        },
-                    )
-                    if tc.get("id"):
-                        acc["id"] = tc["id"]
-                    function = tc.get("function") or {}
-                    if function.get("name"):
-                        acc["name"] = function["name"]
-                    if function.get("arguments"):
-                        acc["arguments"] += function["arguments"]
-                    acc["extra"].update(
-                        {
-                            k: v
-                            for k, v in tc.items()
-                            if k not in ("index", "id", "type", "function")
-                        }
-                    )
+                    if chunk.get("usage"):
+                        usage = Usage(
+                            input_tokens=chunk["usage"].get(
+                                "prompt_tokens", 0
+                            ),
+                            output_tokens=chunk["usage"].get(
+                                "completion_tokens", 0
+                            ),
+                        )
 
-                if choice.get("finish_reason"):
-                    stop_reason = choice["finish_reason"]
-                    saw_terminal_marker = True
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = choice.get("delta") or {}
+
+                    if delta.get("content"):
+                        candidate = text + delta["content"]
+                        if _is_repeating(
+                            candidate,
+                            self.repetition_min_period,
+                            self.repetition_max_period,
+                            self.repetition_repeats,
+                        ):
+                            stop_reason = "repetition"
+                            break
+                        text = candidate
+                        on_delta(delta["content"])
+
+                    for tc in delta.get("tool_calls") or []:
+                        index = tc.get("index", 0)
+                        acc = pending.setdefault(
+                            index,
+                            {
+                                "id": None,
+                                "name": None,
+                                "arguments": "",
+                                "extra": {},
+                            },
+                        )
+                        if tc.get("id"):
+                            acc["id"] = tc["id"]
+                        function = tc.get("function") or {}
+                        if function.get("name"):
+                            acc["name"] = function["name"]
+                        if function.get("arguments"):
+                            acc["arguments"] += function["arguments"]
+                        acc["extra"].update(
+                            {
+                                k: v
+                                for k, v in tc.items()
+                                if k not in ("index", "id", "type", "function")
+                            }
+                        )
+
+                    if choice.get("finish_reason"):
+                        stop_reason = choice["finish_reason"]
+                        saw_terminal_marker = True
+        except Exception:
+            if not text and not pending:
+                raise
+            stop_reason = "connection_lost"
+            saw_terminal_marker = False
 
         if stop_reason is None:
             stop_reason = "stop" if saw_terminal_marker else "connection_lost"

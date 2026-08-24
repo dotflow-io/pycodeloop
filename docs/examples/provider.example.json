@@ -5,7 +5,7 @@
   "headers": {
     "X-Org": "acme"
   },
-  "timeout": 60,
+  "timeout": 180,
 
   "_comment": "response_paths is optional. Omit it entirely if the API already returns the OpenAI chat-completions shape (choices[0].message.content, usage.prompt_tokens, ...). Keep it only to remap a different shape, like the example below.",
   "response_paths": {

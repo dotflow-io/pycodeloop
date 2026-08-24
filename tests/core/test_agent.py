@@ -1159,5 +1159,70 @@ class TestAgentToolResultSummarization(unittest.TestCase):
         self.assertEqual(len(tool_message.content), 10_000)
 
 
+class TestSafeCallback(unittest.TestCase):
+    """A buggy consumer callback (UI rendering, storage persistence,
+    etc.) must not abort the turn/tool loop still in progress — only
+    that one side effect should fail."""
+
+    def test_on_message_raising_does_not_abort_the_turn(self):
+        provider = FakeProvider([ProviderResponse(text="done")])
+        agent = Agent(provider=provider, tools=[])
+        agent.on_message = mock.Mock(side_effect=RuntimeError("storage down"))
+        session = Session(system_prompt="sys")
+
+        result = agent.run("go", session=session)
+
+        self.assertEqual(result, "done")
+        self.assertTrue(agent.on_message.called)
+
+    def test_on_tool_result_raising_still_records_the_tool_result(self):
+        provider = FakeProvider(
+            [
+                ProviderResponse(
+                    text="",
+                    tool_calls=[
+                        ToolCall(id="1", name="echo", arguments={"text": "hi"})
+                    ],
+                ),
+                ProviderResponse(text="done"),
+            ]
+        )
+        agent = Agent(provider=provider, tools=[EchoTool()])
+        agent.on_tool_result = mock.Mock(
+            side_effect=RuntimeError("render bug")
+        )
+        session = Session(system_prompt="sys")
+
+        result = agent.run("go", session=session)
+
+        self.assertEqual(result, "done")
+        tool_message = next(m for m in session.messages if m.role == "tool")
+        self.assertEqual(tool_message.content, "echo: hi")
+
+    def test_failing_callback_is_traced_without_raising(self):
+        provider = FakeProvider([ProviderResponse(text="done")])
+        agent = Agent(provider=provider, tools=[])
+        agent.on_usage = mock.Mock(side_effect=ValueError("boom"))
+        events = []
+        agent.on_trace_event = events.append
+        session = Session(system_prompt="sys")
+
+        agent.run("go", session=session)
+
+        callback_errors = [e for e in events if e["type"] == "callback_error"]
+        self.assertEqual(len(callback_errors), 1)
+        self.assertEqual(callback_errors[0]["error"], "boom")
+
+    def test_trace_event_callback_raising_does_not_propagate(self):
+        provider = FakeProvider([ProviderResponse(text="done")])
+        agent = Agent(provider=provider, tools=[])
+        agent.on_trace_event = mock.Mock(side_effect=RuntimeError("bad sink"))
+        session = Session(system_prompt="sys")
+
+        result = agent.run("go", session=session)
+
+        self.assertEqual(result, "done")
+
+
 if __name__ == "__main__":
     unittest.main()
