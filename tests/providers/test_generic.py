@@ -21,6 +21,37 @@ class _FakeResponse(io.BytesIO):
         return False
 
 
+class _TimeoutAfterLinesResponse(io.BytesIO):
+    """Like `_FakeResponse`, but raises `TimeoutError` once iteration
+    passes `raise_after` lines — simulates the model going quiet
+    mid-stream (long reasoning) and the socket's read timeout firing
+    before any terminal marker or `finish_reason` arrives."""
+
+    def __init__(self, data: bytes, raise_after: int):
+        super().__init__(data)
+        self._raise_after = raise_after
+        self._yielded = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._yielded >= self._raise_after:
+            raise TimeoutError("timed out")
+        line = super().readline()
+        if not line:
+            raise StopIteration
+        self._yielded += 1
+        return line
+
+
 class GenericProviderTestCase(unittest.TestCase):
     def setUp(self):
         tmpdir = tempfile.TemporaryDirectory()
@@ -355,6 +386,49 @@ class TestLoadProviderFromJson(GenericProviderTestCase):
 
         self.assertEqual(result.text, "cut off mid")
         self.assertEqual(result.stop_reason, "connection_lost")
+
+    def test_streaming_returns_partial_text_on_mid_stream_timeout(self):
+        """Regression: a `TimeoutError` raised mid-read (model silent for
+        longer than the socket timeout while "thinking") used to
+        propagate out of `_stream()` uncaught, discarding whatever text
+        had already streamed in and losing the assistant's turn
+        entirely instead of returning it as a partial response."""
+        path = self._write_config(
+            {"url": "http://fake/v1/chat/completions", "model": "my-model"}
+        )
+        provider = GenericProvider.from_json(path)
+
+        chunks = [
+            {"choices": [{"delta": {"content": "partial "}}]},
+            {"choices": [{"delta": {"content": "answer"}}]},
+        ]
+        sse_body = "".join(f"data: {json.dumps(c)}\n" for c in chunks).encode()
+
+        with mock.patch(
+            "pycodeloop.providers.generic.urllib.request.urlopen",
+            return_value=_TimeoutAfterLinesResponse(sse_body, raise_after=1),
+        ):
+            result = provider.complete("sys", [], [], on_delta=lambda _: None)
+
+        self.assertEqual(result.text, "partial ")
+        self.assertEqual(result.stop_reason, "connection_lost")
+
+    def test_streaming_reraises_timeout_when_nothing_was_streamed_yet(self):
+        """A timeout before any content or tool-call delta arrived means
+        nothing was generated to preserve — the exception should still
+        propagate so `Agent._complete()`'s existing retry logic kicks
+        in, instead of being swallowed into an empty response."""
+        path = self._write_config(
+            {"url": "http://fake/v1/chat/completions", "model": "my-model"}
+        )
+        provider = GenericProvider.from_json(path)
+
+        with mock.patch(
+            "pycodeloop.providers.generic.urllib.request.urlopen",
+            return_value=_TimeoutAfterLinesResponse(b"", raise_after=0),
+        ):
+            with self.assertRaises(TimeoutError):
+                provider.complete("sys", [], [], on_delta=lambda _: None)
 
     def test_streaming_stops_promptly_when_cancel_event_is_set(self):
         """Regression: cancel_event was accepted nowhere in the streaming
