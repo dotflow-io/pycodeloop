@@ -485,7 +485,7 @@ class GenericProvider(Provider):
                     if choice.get("finish_reason"):
                         stop_reason = choice["finish_reason"]
                         saw_terminal_marker = True
-        except (TimeoutError, ConnectionError, urllib.error.URLError):
+        except Exception:
             if not text and not pending:
                 raise
             stop_reason = "connection_lost"
