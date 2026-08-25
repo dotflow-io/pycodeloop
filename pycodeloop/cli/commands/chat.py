@@ -17,6 +17,16 @@ def chat(
     url: str = typer.Option(
         None, help="Endpoint URL, required for --provider generic."
     ),
+    temperature: float | None = typer.Option(
+        None,
+        "--temperature",
+        help="Sampling temperature.",
+    ),
+    max_tokens: int | None = typer.Option(
+        None,
+        "--max-tokens",
+        help="Maximum number of tokens to generate.",
+    ),
     mcp: list[str] = typer.Option(
         None, help="MCP server as 'command arg1 arg2'; repeatable."
     ),
@@ -72,6 +82,8 @@ def chat(
         base_url,
         url,
         mcp,
+        temperature=temperature,
+        max_tokens=max_tokens,
         auto_approve=yes,
         skills=skills,
         skills_refresh=skills_refresh,

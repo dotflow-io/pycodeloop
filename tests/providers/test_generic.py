@@ -65,6 +65,76 @@ class GenericProviderTestCase(unittest.TestCase):
 
 
 class TestLoadProviderFromJson(GenericProviderTestCase):
+    def test_inference_params_are_merged_into_the_request_body(self):
+        provider = GenericProvider(
+            url="http://fake/v1/chat/completions",
+            model="my-model",
+            inference_params={
+                "temperature": 0,
+                "max_tokens": 500,
+            },
+        )
+
+        captured_requests = []
+
+        def fake_urlopen(request, timeout=None):
+            captured_requests.append(json.loads(request.data))
+            payload = json.dumps(
+                {
+                    "choices": [
+                        {"message": {"content": "ok"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {},
+                }
+            ).encode()
+            return _FakeResponse(payload)
+
+        with mock.patch(
+            "pycodeloop.providers.generic.urllib.request.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            provider.complete("sys", [], [])
+
+        self.assertEqual(captured_requests[0]["temperature"], 0)
+        self.assertEqual(captured_requests[0]["max_tokens"], 500)
+
+    def test_inference_params_apply_on_top_of_a_custom_request_builder(self):
+        """Config-declared `request.params` are baked into the body once by
+        the custom builder — `inference_params` (CLI overrides forwarded via
+        `get_provider`) must still reach the wire without doubling them up."""
+        path = self._write_config(
+            {
+                "url": "http://fake/v1/chat/completions",
+                "model": "my-model",
+                "request": {"params": {"temperature": 0.7}},
+            }
+        )
+        provider = get_provider(
+            str(path), inference_params={"temperature": 0.1}
+        )
+
+        captured_requests = []
+
+        def fake_urlopen(request, timeout=None):
+            captured_requests.append(json.loads(request.data))
+            payload = json.dumps(
+                {
+                    "choices": [
+                        {"message": {"content": "ok"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {},
+                }
+            ).encode()
+            return _FakeResponse(payload)
+
+        with mock.patch(
+            "pycodeloop.providers.generic.urllib.request.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            provider.complete("sys", [], [])
+
+        self.assertEqual(captured_requests[0]["temperature"], 0.1)
+
     def test_builds_generic_provider_from_config(self):
         path = self._write_config(
             {

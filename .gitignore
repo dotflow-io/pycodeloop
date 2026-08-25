@@ -222,3 +222,4 @@ __marimo__/
 
 # Personal pycodeloop provider config (may end up holding local overrides)
 pycodeloop.config.json
+.DS_Store

@@ -101,6 +101,8 @@ def resolve_provider(
     model: str | None,
     base_url: str | None = None,
     url: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> tuple[Provider, str]:
     """Build a `Provider` from CLI-style args, returning it alongside the
     resolved provider name — shared by the interactive CLI and `serve`."""
@@ -125,6 +127,17 @@ def resolve_provider(
     else:
         provider_kwargs = {"model": model or Settings.MODEL}
 
+    inference_params = {}
+
+    if temperature is not None:
+        inference_params["temperature"] = temperature
+
+    if max_tokens is not None:
+        inference_params["max_tokens"] = max_tokens
+
+    if inference_params:
+        provider_kwargs["inference_params"] = inference_params
+
     return get_provider(provider_name, **provider_kwargs), provider_name
 
 
@@ -134,6 +147,8 @@ def build_flow(
     base_url: str | None = None,
     url: str | None = None,
     mcp: list[str] | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
     auto_approve: bool = False,
     skills: bool = False,
     skills_refresh: bool = False,
@@ -142,7 +157,7 @@ def build_flow(
     workspace: bool = True,
 ) -> tuple[CodeLoop, str, str]:
     provider, provider_name = resolve_provider(
-        provider_name, model, base_url, url
+        provider_name, model, base_url, url, temperature, max_tokens
     )
 
     buffer = TurnBuffer(console)

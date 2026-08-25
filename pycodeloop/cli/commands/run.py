@@ -64,6 +64,14 @@ def run(
             "arbitrary shell commands. On by default."
         ),
     ),
+    temperature: float | None = typer.Option(
+        None,
+        help="Sampling temperature.",
+    ),
+    max_tokens: int | None = typer.Option(
+        None,
+        help="Maximum number of tokens to generate",
+    ),
 ) -> None:
     """Run a single prompt to completion, non-interactively."""
     flow, _provider_name, _model = build_flow(
@@ -72,6 +80,8 @@ def run(
         base_url,
         url,
         mcp,
+        temperature=temperature,
+        max_tokens=max_tokens,
         auto_approve=yes,
         skills=skills,
         skills_refresh=skills_refresh,
