@@ -63,6 +63,12 @@ def _from_json_path(path: str, kwargs: dict) -> GenericProvider:
     if kwargs.get("api_key"):
         provider.api_key = kwargs["api_key"]
 
+    if kwargs.get("inference_params"):
+        provider.inference_params = {
+            **provider.inference_params,
+            **kwargs["inference_params"],
+        }
+
     return provider
 
 

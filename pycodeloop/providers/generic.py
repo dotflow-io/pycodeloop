@@ -122,6 +122,7 @@ class _ConnectionSnapshot:
     response_parser: ResponseParser
     supports_openai_sse: bool
     include_usage_in_stream: bool
+    inference_params: dict
 
 
 class GenericProvider(Provider):
@@ -198,7 +199,7 @@ class GenericProvider(Provider):
         context_window: int | None = None,
         supports_openai_sse: bool = True,
         include_usage_in_stream: bool = True,
-        inference_params: dict | None=None,
+        inference_params: dict | None = None,
         **kwargs,
     ) -> None:
         super().__init__(model=model, api_key=api_key, **kwargs)
@@ -251,7 +252,15 @@ class GenericProvider(Provider):
         if "request" in data:
             request_builder = request_builder_from_config(data["request"])
 
-        request_params = (data.get("request") or {}).get("params") or {}
+        # Static `request.params` are already baked into the body by
+        # `request_builder_from_config` when a custom builder is in play —
+        # only fall back to `inference_params` (used by `_default_request`)
+        # when there's no custom builder to double-apply them.
+        request_params = (
+            {}
+            if request_builder
+            else (data.get("request") or {}).get("params") or {}
+        )
 
         return cls(
             url=data["url"],
@@ -293,16 +302,14 @@ class GenericProvider(Provider):
             self._include_usage_in_stream = fresh._include_usage_in_stream
             self.inference_params = fresh.inference_params
 
-    
+    @staticmethod
     def _default_request(
-        self,
         system_prompt: str,
         messages: list[Message],
         tools: list[dict],
         model: str,
     ) -> dict:
         return {
-            **self.inference_params,
             "model": model,
             "messages": to_openai_messages(system_prompt, messages),
             "tools": openai_tool_schema(tools) if tools else None,
@@ -322,6 +329,7 @@ class GenericProvider(Provider):
             response_parser=self.response_parser,
             supports_openai_sse=self._supports_openai_sse,
             include_usage_in_stream=self._include_usage_in_stream,
+            inference_params=dict(self.inference_params),
         )
 
     def _headers(self, config: _ConnectionSnapshot) -> dict[str, str]:
@@ -365,6 +373,8 @@ class GenericProvider(Provider):
         body = config.request_builder(
             system_prompt, messages, tools, config.model
         )
+        if config.inference_params:
+            body = {**body, **config.inference_params}
         known_tools = {tool["name"] for tool in tools}
 
         if on_delta is not None and config.supports_openai_sse:

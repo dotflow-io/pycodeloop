@@ -22,7 +22,6 @@ def chat(
         "--temperature",
         help="Sampling temperature.",
     ),
-
     max_tokens: int | None = typer.Option(
         None,
         "--max-tokens",
